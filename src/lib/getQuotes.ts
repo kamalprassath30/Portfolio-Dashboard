@@ -2,26 +2,43 @@
 import { getCachedQuote, setCachedQuote } from "./quoteCache";
 
 /**
- * Fetch quotes for an array of Yahoo symbols (e.g. ["TCS.NS","ICICIBANK.NS"])
- * Returns a map: { "TCS.NS": 4200.12, "ICICIBANK.NS": 1050.2 }
+ * Fetch quotes from Yahoo Finance for given symbols (like ["TCS.NS", "HDFCBANK.NS"])
+ * Returns price, EPS, and earnings timestamp (if available)
  */
 export async function getQuotes(
   symbols: string[]
-): Promise<Record<string, number | null>> {
-  const out: Record<string, number | null> = {};
+): Promise<
+  Record<
+    string,
+    {
+      price: number | null;
+      eps: number | null;
+      earningsTimestamp: number | null;
+    }
+  >
+> {
+  const out: Record<
+    string,
+    {
+      price: number | null;
+      eps: number | null;
+      earningsTimestamp: number | null;
+    }
+  > = {};
   const toFetch: string[] = [];
 
-  // check cache first
+  // Check cache
   for (const s of symbols) {
     const cached = getCachedQuote(s);
-    if (cached !== null) out[s] = cached;
-    else toFetch.push(s);
+    if (cached && typeof cached === "object" && "price" in cached) {
+      out[s] = cached as any;
+    } else {
+      toFetch.push(s);
+    }
   }
 
   if (toFetch.length === 0) return out;
 
-  // Yahoo allows multiple symbols joined by comma
-  // Break into batches to be safe (batch size 10)
   const BATCH = 10;
   for (let i = 0; i < toFetch.length; i += BATCH) {
     const batch = toFetch.slice(i, i + BATCH);
@@ -29,40 +46,28 @@ export async function getQuotes(
     const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${q}`;
 
     try {
-      const res = await fetch(url, {
-        headers: { "User-Agent": "node-fetch" }, // just in case
-      });
-      if (!res.ok) {
-        // set nulls for this batch so code doesn't crash
-        for (const s of batch) out[s] = null;
-        continue;
-      }
+      const res = await fetch(url);
       const json = await res.json();
       const results = json?.quoteResponse?.result ?? [];
 
-      // fill results
-      const found: Record<string, number> = {};
       for (const r of results) {
-        // Yahoo returns regularMarketPrice (or regularMarketPreviousClose etc.)
         const sym = r.symbol;
         const price =
           r.regularMarketPrice ?? r.regularMarketPreviousClose ?? null;
-        if (typeof price === "number") {
-          found[sym] = price;
-          setCachedQuote(sym, price);
-          out[sym] = price;
-        } else {
-          out[sym] = null;
-        }
-      }
 
-      // any symbols not returned -> set null
-      for (const s of batch) {
-        if (out[s] === undefined) out[s] = null;
+        const eps = r.epsTrailingTwelveMonths ?? r.trailingEps ?? r.eps ?? null;
+
+        const earningsTimestamp = r.earningsTimestamp ?? null;
+
+        const obj = { price, eps, earningsTimestamp };
+        out[sym] = obj;
+        setCachedQuote(sym, obj);
       }
     } catch (err) {
-      console.error("getQuotes fetch error:", err);
-      for (const s of batch) out[s] = null;
+      console.error("Yahoo fetch error:", err);
+      for (const s of batch) {
+        out[s] = { price: null, eps: null, earningsTimestamp: null };
+      }
     }
   }
 

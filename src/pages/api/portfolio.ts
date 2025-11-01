@@ -3,20 +3,27 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import fs from "fs";
 import path from "path";
 import { getQuotes } from "@/lib/getQuotes";
+import { getGoogleData } from "@/lib/getGoogleData";
 
 type RawHolding = { [k: string]: any };
 
+// Map company names to Yahoo Finance symbols
 const symbolMap: Record<string, string> = {
-  // edit this map to match company names in your JSON to Yahoo symbols
-  // Example:
   TCS: "TCS.NS",
   "TCS Ltd": "TCS.NS",
   "ICICI Bank": "ICICIBANK.NS",
   "Bajaj Finance": "BAJFINANCE.NS",
   "HDFC Bank": "HDFCBANK.NS",
 };
+const sectorMap: Record<string, string> = {
+  "HDFC Bank": "Banking",
+  "ICICI Bank": "Banking",
+  "Bajaj Finance": "Financial Services",
+  TCS: "IT",
+  "TCS Ltd": "IT",
+};
 
-// helper to extract symbol from the row (first try explicit fields, then map by name)
+// helper: extract symbol from row
 function extractSymbol(h: RawHolding): string | null {
   const s =
     (h.Symbol ??
@@ -27,9 +34,10 @@ function extractSymbol(h: RawHolding): string | null {
       null) ||
     null;
   if (s && typeof s === "string" && s.trim()) return s.trim();
+
   const name = (h.Particulars || h["Particulars"] || "").toString().trim();
   if (name && symbolMap[name]) return symbolMap[name];
-  // try a simple normalization (uppercase, strip dots/spaces) - not reliable
+
   const key = name.replace(/\s+/g, "").toUpperCase();
   for (const k of Object.keys(symbolMap)) {
     if (k.replace(/\s+/g, "").toUpperCase() === key) return symbolMap[k];
@@ -37,6 +45,7 @@ function extractSymbol(h: RawHolding): string | null {
   return null;
 }
 
+// clean malformed JSON text (for safety)
 function sanitizeJsonText(raw: string) {
   let s = raw;
   s = s.replace(/^\uFEFF/, "");
@@ -56,47 +65,46 @@ export default async function handler(
   res: NextApiResponse
 ) {
   try {
+    // ---- Step 1: Read local JSON ----
     const filePath = path.join(process.cwd(), "data", "portfolio_sample.json");
     let raw = fs.readFileSync(filePath, "utf-8");
-    // parse safely
+
     let parsed: RawHolding[] | null = null;
     try {
       parsed = JSON.parse(raw);
     } catch {
       const sanitized = sanitizeJsonText(raw);
-      try {
-        parsed = JSON.parse(sanitized);
-      } catch (e) {
-        console.error("Failed to parse portfolio JSON after sanitization:", e);
-        res
-          .status(500)
-          .json({ error: "Invalid portfolio JSON. See server logs." });
-        return;
-      }
+      parsed = JSON.parse(sanitized);
     }
 
     const rawHoldings: RawHolding[] = Array.isArray(parsed) ? parsed : [parsed];
 
-    // collect symbols
+    // ---- Step 2: Extract all symbols ----
     const symbolSet = new Set<string>();
     const symbolByIndex: (string | null)[] = [];
+
     for (const h of rawHoldings) {
       const sym = extractSymbol(h);
       symbolByIndex.push(sym);
       if (sym) symbolSet.add(sym);
     }
+
     const symbols = Array.from(symbolSet);
     const yahooSymbols = symbols.map((s) =>
       s.endsWith(".NS") || s.endsWith(".BO") ? s : `${s}.NS`
     );
-    // fetch quotes (cached inside getQuotes)
-    let quotes: Record<string, number | null> = {};
-    if (symbols.length > 0) {
-      quotes = await getQuotes(yahooSymbols);
-    }
 
-    // normalize & calculate using live quotes when available
-    const holdings = rawHoldings.map((h: any, idx: number) => {
+    // ---- Step 3: Fetch from Yahoo + Google ----
+    const quotes = symbols.length > 0 ? await getQuotes(yahooSymbols) : {};
+    const googleData = await getGoogleData(yahooSymbols);
+
+    console.log(
+      "googleData preview:",
+      JSON.stringify(Object.entries(googleData).slice(0, 3), null, 2)
+    );
+
+    // ---- Step 4: Combine + calculate ----
+    const holdings = rawHoldings.map((h, idx) => {
       const qty = Number(h["Qty"] ?? h.Qty ?? 0) || 0;
       const purchasePrice =
         Number(
@@ -106,18 +114,40 @@ export default async function handler(
         Number(h["Investment"] ?? 0) || purchasePrice * qty || 0;
 
       const symbol = symbolByIndex[idx];
-      // prefer live quote if available, else fallback to CMP in JSON, else 0
+      const yahooSymbol =
+        symbol && !symbol.endsWith(".NS") && !symbol.endsWith(".BO")
+          ? `${symbol}.NS`
+          : symbol;
+
+      const live = yahooSymbol ? (quotes as any)[yahooSymbol] ?? null : null;
       const cmpFromJson = Number(h["CMP"] ?? h.cmp ?? 0) || 0;
-      const live = symbol ? quotes[symbol] ?? null : null;
-      const cmp = typeof live === "number" ? live : cmpFromJson;
+      const cmp = live?.price ?? cmpFromJson ?? 0;
 
       const presentValue = +(qty * cmp).toFixed(2);
       const gainLoss = +(presentValue - investment).toFixed(2);
       const gainLossPct = investment ? +(gainLoss / investment).toFixed(4) : 0;
 
+      const googleForThis = yahooSymbol
+        ? googleData[yahooSymbol] ?? null
+        : null;
+
+      const googlePe = googleForThis?.pe ?? null;
+      const yahooEps = live?.eps ?? null;
+
+      // If Google P/E missing, calculate fallback from Yahoo EPS
+      const finalPe =
+        googlePe !== null
+          ? googlePe
+          : yahooEps && yahooEps > 0
+          ? +(cmp / yahooEps).toFixed(2)
+          : null;
+
+      // Prefer Google earnings; fallback to Yahoo EPS
+      const finalEarnings = googleForThis?.earnings ?? yahooEps ?? null;
+      const name = (h.Particulars || h["Particulars"] || "").toString().trim();
       return {
         ...h,
-        symbol: symbol ?? null,
+        symbol: yahooSymbol,
         qty,
         purchasePrice,
         investment,
@@ -125,12 +155,15 @@ export default async function handler(
         presentValue,
         gainLoss,
         gainLossPct,
-        sector: h["Sector"] ?? h.Sector ?? "Unknown",
+        pe: finalPe,
+        latestEarnings: finalEarnings,
+        sector: h["Sector"] ?? h["Industry"] ?? sectorMap[name] ?? "Unknown",
       };
     });
 
+    // ---- Step 5: Totals ----
     const totals = holdings.reduce(
-      (acc: any, cur: any) => {
+      (acc, cur) => {
         acc.totalInvestment += Number(cur.investment || 0);
         acc.totalPresentValue += Number(cur.presentValue || 0);
         acc.totalGainLoss += Number(cur.gainLoss || 0);
@@ -139,13 +172,14 @@ export default async function handler(
       { totalInvestment: 0, totalPresentValue: 0, totalGainLoss: 0 }
     );
 
-    res
-      .status(200)
-      .json({ lastUpdated: new Date().toISOString(), totals, holdings });
+    // ---- Step 6: Response ----
+    res.status(200).json({
+      lastUpdated: new Date().toISOString(),
+      totals,
+      holdings,
+    });
   } catch (err) {
-    console.error("/api/portfolio unexpected error:", err);
-    res
-      .status(500)
-      .json({ error: "Unexpected server error", details: String(err) });
+    console.error("/api/portfolio error:", err);
+    res.status(500).json({ error: "Server error", details: String(err) });
   }
 }
