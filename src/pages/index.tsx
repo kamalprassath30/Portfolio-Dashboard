@@ -21,6 +21,7 @@ type Holding = {
   qty?: number;
   cmp?: number;
   investment?: number;
+  purchasePrice?: number;
   presentValue?: number;
   gainLoss?: number;
   pe?: number | null;
