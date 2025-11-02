@@ -573,7 +573,7 @@ export default function PortfolioDashboard() {
                         {h.Particulars ?? h.symbol ?? "-"}
                       </td>
                       <td className="px-3 py-2 border text-right">
-                        {h.purchasePrice ?? h["Purchase Price"] ?? "-"}
+                        {h.purchasePrice ?? (h as any)["Purchase Price"] ?? "-"}{" "}
                       </td>
                       <td className="px-3 py-2 border text-right">
                         {h.qty ?? "-"}
