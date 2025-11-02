@@ -17,7 +17,7 @@ export async function getQuotes(
   const out: Record<string, Quote> = {};
   const toFetch: string[] = [];
 
-  // Check cache
+  // check cache
   for (const s of symbols) {
     const cached = getCachedQuote(s);
     if (cached && typeof cached === "object" && "price" in cached) {
@@ -44,15 +44,12 @@ export async function getQuotes(
         const sym = r.symbol;
         const price =
           r.regularMarketPrice ?? r.regularMarketPreviousClose ?? null;
-
         const eps = r.epsTrailingTwelveMonths ?? r.trailingEps ?? r.eps ?? null;
-
         const earningsTimestamp = r.earningsTimestamp ?? null;
 
         const obj: Quote = { price, eps, earningsTimestamp };
         out[sym] = obj;
-        // cast to any to satisfy potentially different setCachedQuote signature
-        setCachedQuote(sym, obj as any);
+        setCachedQuote(sym, obj); // ✅ works fine with any-type cache
       }
     } catch (err) {
       console.error("Yahoo fetch error:", err);
