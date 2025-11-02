@@ -172,11 +172,32 @@ export default async function handler(
       { totalInvestment: 0, totalPresentValue: 0, totalGainLoss: 0 }
     );
 
+    // --- Add portfolio percent and NSE/BSE code to holdings ---
+    const totalPresentValue = totals.totalPresentValue || 0;
+
+    const enrichedHoldings = holdings.map((h: any) => {
+      const presentValue = Number(h.presentValue ?? 0);
+      const portfolioPct =
+        totalPresentValue > 0
+          ? +((presentValue / totalPresentValue) * 100).toFixed(4)
+          : 0;
+
+      // prefer explicit NSE/BSE field from original file; fallback to symbol (Yahoo)
+      const nseCode =
+        h["NSE/BSE"] ?? h["NSE"] ?? h["NSE/BSE "] ?? h.symbol ?? null;
+
+      return {
+        ...h,
+        portfolioPercent: portfolioPct, // numeric percent (e.g. 4.8321)
+        nseCode,
+      };
+    });
+
     // ---- Step 6: Response ----
     res.status(200).json({
       lastUpdated: new Date().toISOString(),
       totals,
-      holdings,
+      holdings: enrichedHoldings,
     });
   } catch (err) {
     console.error("/api/portfolio error:", err);
