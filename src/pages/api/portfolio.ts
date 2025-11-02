@@ -77,7 +77,9 @@ export default async function handler(
       parsed = JSON.parse(sanitized);
     }
 
-    const rawHoldings: RawHolding[] = Array.isArray(parsed) ? parsed : [parsed];
+    const rawHoldings: RawHolding[] = (
+      Array.isArray(parsed) ? parsed : [parsed]
+    ).filter((h): h is RawHolding => h !== null && typeof h === "object");
 
     // ---- Step 2: Extract all symbols ----
     const symbolSet = new Set<string>();
