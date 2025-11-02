@@ -28,6 +28,7 @@ type Holding = {
   latestEarnings?: number | null;
   sector?: string;
   portfolioPercent?: number;
+  nseCode?: string;
 };
 
 type ApiResp = {
