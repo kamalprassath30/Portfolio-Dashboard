@@ -1,37 +1,27 @@
 // src/lib/getQuotes.ts
 import { getCachedQuote, setCachedQuote } from "./quoteCache";
 
+type Quote = {
+  price: number | null;
+  eps: number | null;
+  earningsTimestamp: number | null;
+};
+
 /**
  * Fetch quotes from Yahoo Finance for given symbols (like ["TCS.NS", "HDFCBANK.NS"])
  * Returns price, EPS, and earnings timestamp (if available)
  */
 export async function getQuotes(
   symbols: string[]
-): Promise<
-  Record<
-    string,
-    {
-      price: number | null;
-      eps: number | null;
-      earningsTimestamp: number | null;
-    }
-  >
-> {
-  const out: Record<
-    string,
-    {
-      price: number | null;
-      eps: number | null;
-      earningsTimestamp: number | null;
-    }
-  > = {};
+): Promise<Record<string, Quote>> {
+  const out: Record<string, Quote> = {};
   const toFetch: string[] = [];
 
   // Check cache
   for (const s of symbols) {
     const cached = getCachedQuote(s);
     if (cached && typeof cached === "object" && "price" in cached) {
-      out[s] = cached as any;
+      out[s] = cached as Quote;
     } else {
       toFetch.push(s);
     }
@@ -59,9 +49,10 @@ export async function getQuotes(
 
         const earningsTimestamp = r.earningsTimestamp ?? null;
 
-        const obj = { price, eps, earningsTimestamp };
+        const obj: Quote = { price, eps, earningsTimestamp };
         out[sym] = obj;
-        setCachedQuote(sym, obj);
+        // cast to any to satisfy potentially different setCachedQuote signature
+        setCachedQuote(sym, obj as any);
       }
     } catch (err) {
       console.error("Yahoo fetch error:", err);
