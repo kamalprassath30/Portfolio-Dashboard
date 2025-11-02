@@ -29,6 +29,7 @@ type Holding = {
   sector?: string;
   portfolioPercent?: number;
   nseCode?: string;
+  [key: string]: any;
 };
 
 type ApiResp = {
