@@ -58,10 +58,3 @@ A dynamic portfolio dashboard built using Next.js, TypeScript, and Tailwind CSS 
 
 ---
 
-## 📦 Setup Instructions
-
-```bash
-git clone <your-repo-link>
-cd portfolio-dashboard
-npm install
-npm run dev
